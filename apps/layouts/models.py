@@ -24,6 +24,9 @@ class StoreLayout(models.Model):
         max_length=8, choices=SourceFormat.choices, blank=True, default=""
     )
     source_filename = models.CharField(max_length=255, blank=True, default="")
+    source_file = models.FileField(
+        upload_to="layouts/raw/", blank=True, null=True, max_length=500
+    )
     units = models.CharField(max_length=16, default="mm")
     scale_factor = models.FloatField(default=1.0)
     origin_offset_x_mm = models.IntegerField(default=0)
@@ -35,6 +38,12 @@ class StoreLayout(models.Model):
     confidence_pct = models.PositiveSmallIntegerField(null=True, blank=True)
     needs_review_counts = models.JSONField(default=dict, blank=True)
     overlays = models.JSONField(default=dict, blank=True)
+    # Underlay linework for floor canvas: {type, features:[{geometry:{type,coordinates},properties}]}
+    underlay = models.JSONField(default=dict, blank=True)
+    extent_min_x = models.FloatField(null=True, blank=True)
+    extent_min_y = models.FloatField(null=True, blank=True)
+    extent_max_x = models.FloatField(null=True, blank=True)
+    extent_max_y = models.FloatField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

@@ -5,6 +5,7 @@ from apps.api import views
 
 router = DefaultRouter()
 router.register(r"stores", views.StoreViewSet)
+router.register(r"layouts", views.StoreLayoutViewSet, basename="layouts")
 router.register(r"departments", views.DepartmentViewSet)
 router.register(r"aisles", views.AisleViewSet)
 router.register(r"catalog/fixture-types", views.FixtureTypeViewSet, basename="fixture-types")

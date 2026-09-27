@@ -1,9 +1,8 @@
 import { useEffect, useState } from "react";
 import { NavLink, Navigate, Route, Routes } from "react-router-dom";
 import { api, ensureCsrf, type User } from "./api";
-import EditorPage from "./pages/EditorPage";
-import FixturesPage from "./pages/FixturesPage";
 import ProductsPage from "./pages/ProductsPage";
+import StoreFloorPage from "./pages/StoreFloorPage";
 import StoresPage from "./pages/StoresPage";
 
 export default function App() {
@@ -48,9 +47,7 @@ export default function App() {
           <NavLink to="/" end>
             Stores
           </NavLink>
-          <NavLink to="/fixtures">Fixtures</NavLink>
           <NavLink to="/products">Product Master</NavLink>
-          <NavLink to="/editor">Editor</NavLink>
         </nav>
         <div className="user-chip">
           <span className="badge">{user.role.replace("_", " ")}</span>
@@ -62,10 +59,10 @@ export default function App() {
       </header>
       <Routes>
         <Route path="/" element={<StoresPage />} />
-        <Route path="/fixtures" element={<FixturesPage />} />
+        <Route path="/stores/:storeId" element={<StoreFloorPage />} />
         <Route path="/products" element={<ProductsPage />} />
-        <Route path="/editor" element={<EditorPage />} />
-        <Route path="/editor/:planogramId" element={<EditorPage />} />
+        <Route path="/fixtures" element={<Navigate to="/" replace />} />
+        <Route path="/editor" element={<Navigate to="/" replace />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </div>

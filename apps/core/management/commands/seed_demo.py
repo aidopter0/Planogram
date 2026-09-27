@@ -266,6 +266,28 @@ class Command(BaseCommand):
                     placement_mode=(at.placement_mode_options or ["FLOOR"])[0],
                 )
 
+        # Attach sample DXF underlay for floor canvas (idempotent refresh)
+        from apps.layouts.services import parse_dxf_to_underlay
+
+        sample = FIXTURES_ROOT / "cad" / "sample-store.dxf"
+        if sample.exists():
+            try:
+                result = parse_dxf_to_underlay(sample)
+                layout.underlay = result["underlay"]
+                ext = result["extent"]
+                layout.extent_min_x = ext["min_x"]
+                layout.extent_min_y = ext["min_y"]
+                layout.extent_max_x = ext["max_x"]
+                layout.extent_max_y = ext["max_y"]
+                layout.confidence_pct = result["confidence_pct"]
+                layout.needs_review_counts = result["needs_review_counts"]
+                layout.source_format = "dxf"
+                layout.source_filename = "sample-store.dxf"
+                layout.status = "ready"
+                layout.save()
+            except Exception as exc:  # noqa: BLE001
+                self.stdout.write(self.style.WARNING(f"  DXF underlay skipped: {exc}"))
+
         self.stdout.write(
             f"  store {store.name} (id={store.id}) "
             f"fixtures={store.fixtures.count()} assets={store.store_assets.count()}"

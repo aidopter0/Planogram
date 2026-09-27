@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from pathlib import Path
 from typing import Any
 
 from django.db import transaction
@@ -25,6 +26,7 @@ from apps.api.serializers import (
     ProductSerializer,
     StoreAssetInstanceSerializer,
     StoreAssetTypeSerializer,
+    StoreLayoutSerializer,
     StoreSerializer,
 )
 from apps.catalog.models import (
@@ -47,10 +49,12 @@ from apps.fixtures.models import (
     StoreAssetInstance,
 )
 from apps.layouts.models import StoreLayout
+from apps.layouts.services import ingest_uploaded_layout
 from apps.planograms.models import Planogram, PlanogramScene
 from apps.products.models import Product
 from apps.products.services import import_products_csv
 from apps.stores.models import Aisle, Department, Store
+
 
 
 @api_view(["GET"])
@@ -74,6 +78,99 @@ class StoreViewSet(viewsets.ModelViewSet):
         store = self.get_object()
         qs = store.aisles.all()
         return Response(AisleSerializer(qs, many=True).data)
+
+    @action(detail=True, methods=["get"])
+    def layout(self, request, pk=None):
+        store = self.get_object()
+        layout = store.layouts.filter(is_active=True).first()
+        if not layout:
+            return Response({"detail": "No active layout"}, status=404)
+        return Response(StoreLayoutSerializer(layout).data)
+
+    @action(detail=False, methods=["post"], url_path="create-with-layout")
+    def create_with_layout(self, request):
+        """New Store → CAD upload first. Creates store + active layout + ingest."""
+        upload = request.FILES.get("file") or request.FILES.get("layout")
+        if not upload:
+            return Response(
+                {"detail": "CAD/BIM file required (DWG/DXF/RVT/IFC)."},
+                status=400,
+            )
+        name = (
+            request.data.get("name")
+            or Path(upload.name).stem.replace("_", " ").replace("-", " ").title()
+            or "New Store"
+        )
+        code = request.data.get("code") or f"ST-{timezone.now().strftime('%H%M%S')}"
+        with transaction.atomic():
+            store = Store.objects.create(
+                name=name,
+                code=code,
+                status=request.data.get("status") or "draft",
+                cluster_tag=request.data.get("cluster_tag") or "",
+            )
+            # Deactivate any prior (none yet) and create active layout
+            layout = StoreLayout.objects.create(
+                store=store,
+                name="Active layout",
+                is_active=True,
+                status="draft",
+            )
+            job = ingest_uploaded_layout(layout, upload)
+            layout.refresh_from_db()
+        return Response(
+            {
+                "store": StoreSerializer(store).data,
+                "layout": StoreLayoutSerializer(layout).data,
+                "ingest": {
+                    "id": job.id,
+                    "state": job.state,
+                    "progress": job.progress,
+                    "error_message": job.error_message,
+                },
+            },
+            status=201 if job.state == "ready" else 400,
+        )
+
+    @action(detail=True, methods=["post"], url_path="upload-layout")
+    def upload_layout(self, request, pk=None):
+        store = self.get_object()
+        upload = request.FILES.get("file") or request.FILES.get("layout")
+        if not upload:
+            return Response({"detail": "CAD/BIM file required"}, status=400)
+        with transaction.atomic():
+            store.layouts.filter(is_active=True).update(is_active=False)
+            layout = StoreLayout.objects.create(
+                store=store, name="Active layout", is_active=True, status="draft"
+            )
+            job = ingest_uploaded_layout(layout, upload)
+            layout.refresh_from_db()
+        return Response(
+            {
+                "layout": StoreLayoutSerializer(layout).data,
+                "ingest": {
+                    "id": job.id,
+                    "state": job.state,
+                    "progress": job.progress,
+                    "error_message": job.error_message,
+                },
+            },
+            status=200 if job.state == "ready" else 400,
+        )
+
+
+class StoreLayoutViewSet(viewsets.ReadOnlyModelViewSet):
+    queryset = StoreLayout.objects.select_related("store")
+    serializer_class = StoreLayoutSerializer
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        store_id = self.request.query_params.get("store")
+        if store_id:
+            qs = qs.filter(store_id=store_id)
+        if self.request.query_params.get("active") == "1":
+            qs = qs.filter(is_active=True)
+        return qs
 
 
 class DepartmentViewSet(viewsets.ModelViewSet):
@@ -248,6 +345,19 @@ class FixtureInstanceViewSet(viewsets.ModelViewSet):
         return Response(
             FixtureInstanceSerializer(inst).data, status=status.HTTP_201_CREATED
         )
+
+    @action(detail=True, methods=["patch"], url_path="pose")
+    def pose(self, request, pk=None):
+        """Floor/top SoT: update Fixture Instance pose (x, y, rotation)."""
+        inst = self.get_object()
+        if "x_mm" in request.data:
+            inst.x_mm = int(request.data["x_mm"])
+        if "y_mm" in request.data:
+            inst.y_mm = int(request.data["y_mm"])
+        if "rotation_deg" in request.data:
+            inst.rotation_deg = float(request.data["rotation_deg"])
+        inst.save(update_fields=["x_mm", "y_mm", "rotation_deg", "updated_at"])
+        return Response(FixtureInstanceSerializer(inst).data)
 
     @action(detail=False, methods=["post"], url_path="batch-bays")
     def batch_bays(self, request):

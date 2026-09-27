@@ -12,12 +12,15 @@ from apps.fixtures.models import (
     FixtureRun,
     StoreAssetInstance,
 )
+from apps.layouts.models import StoreLayout
 from apps.planograms.models import Planogram, PlanogramScene
 from apps.products.models import Product
 from apps.stores.models import Aisle, Department, Store
 
 
 class StoreSerializer(serializers.ModelSerializer):
+    active_layout_id = serializers.SerializerMethodField()
+
     class Meta:
         model = Store
         fields = [
@@ -26,10 +29,58 @@ class StoreSerializer(serializers.ModelSerializer):
             "code",
             "cluster_tag",
             "status",
+            "active_layout_id",
             "created_at",
             "updated_at",
         ]
-        read_only_fields = ["created_at", "updated_at"]
+        read_only_fields = ["created_at", "updated_at", "active_layout_id"]
+
+    def get_active_layout_id(self, obj: Store) -> int | None:
+        layout = obj.layouts.filter(is_active=True).first()
+        return layout.id if layout else None
+
+
+class StoreLayoutSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = StoreLayout
+        fields = [
+            "id",
+            "store",
+            "name",
+            "is_active",
+            "source_format",
+            "source_filename",
+            "units",
+            "scale_factor",
+            "origin_offset_x_mm",
+            "origin_offset_y_mm",
+            "rotation_deg",
+            "status",
+            "confidence_pct",
+            "needs_review_counts",
+            "overlays",
+            "underlay",
+            "extent_min_x",
+            "extent_min_y",
+            "extent_max_x",
+            "extent_max_y",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = [
+            "created_at",
+            "updated_at",
+            "underlay",
+            "confidence_pct",
+            "needs_review_counts",
+            "source_format",
+            "source_filename",
+            "extent_min_x",
+            "extent_min_y",
+            "extent_max_x",
+            "extent_max_y",
+            "status",
+        ]
 
 
 class DepartmentSerializer(serializers.ModelSerializer):
@@ -161,6 +212,7 @@ class ComponentInstanceSerializer(serializers.ModelSerializer):
 class FixtureInstanceSerializer(serializers.ModelSerializer):
     fixture_type_code = serializers.CharField(source="fixture_type.code", read_only=True)
     fixture_type_name = serializers.CharField(source="fixture_type.name", read_only=True)
+    fixture_type_family = serializers.CharField(source="fixture_type.family", read_only=True)
     components = ComponentInstanceSerializer(many=True, read_only=True)
     bay_width_mm = serializers.IntegerField(read_only=True)
 
@@ -173,6 +225,7 @@ class FixtureInstanceSerializer(serializers.ModelSerializer):
             "fixture_type",
             "fixture_type_code",
             "fixture_type_name",
+            "fixture_type_family",
             "department",
             "aisle",
             "run",
