@@ -74,6 +74,13 @@ a {
   display: grid;
   grid-template-rows: 56px 1fr;
   height: 100%;
+  overflow: hidden;
+}
+
+.app-shell > .page,
+.app-shell > .canvas-shell {
+  min-height: 0;
+  overflow: hidden;
 }
 
 .topbar {
@@ -617,10 +624,11 @@ table.data tr:last-child td {
 .canvas-shell {
   display: flex;
   flex-direction: column;
-  height: calc(100% - 0px);
+  height: 100%;
   max-width: none;
   padding: 0;
   margin: 0;
+  overflow: hidden;
 }
 
 .canvas-top {
@@ -732,6 +740,7 @@ table.data tr:last-child td {
     radial-gradient(circle at 20% 10%, rgba(16, 185, 129, 0.06), transparent 40%),
     linear-gradient(180deg, #e2e8f0, #f8fafc);
   min-height: 0;
+  height: 100%;
   overflow: hidden;
 }
 
@@ -759,7 +768,9 @@ table.data tr:last-child td {
   display: flex;
   flex-direction: column;
   min-height: 0;
+  height: 100%;
   background: var(--bg-muted);
+  overflow: hidden;
 }
 
 .elevation-header {
