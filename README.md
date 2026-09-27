@@ -37,12 +37,19 @@ Set `DATABASE_URL=postgres://USER:PASS@HOST:5432/planogram` in `.env`.
 1. Django apps: `accounts`, `stores`, `layouts`, `catalog`, `fixtures`, `products`, `planograms`, `api`, `core`
 2. Session login / logout + role profile stub
 3. Product Master: models, CSV (+ ZIP images) import, list/detail API, image upload
-4. Fixture Type catalog + place Fixture Instance / batch bays on a store
+4. **Org-global Fixture Type catalog** (Appendix A representative families) + place Fixture / Store Asset instances
 5. Planogram editor API: scene graph, carriers, placements, `available_width` / width-fit validate (D3)
-6. React SPA: login → stores → product master → elevation editor with pack-front proxies + width meter
+6. React SPA: login → stores → **fixtures library** → product master → elevation editor
 7. R3F orthographic elevation canvas (facing strip)
 8. `fixtures/cad/sample-store.dxf` + `fixtures/products/` CSV+ZIP seed
 9. Binding decisions D1–D6 applied (see product decisions v0.9)
+
+### Catalog seed
+
+```bash
+python manage.py seed_catalog   # Appendix A representative types
+python manage.py seed_demo      # users + store + products + calls seed_catalog
+```
 
 ## Ports
 

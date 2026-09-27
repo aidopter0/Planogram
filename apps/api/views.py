@@ -23,6 +23,7 @@ from apps.api.serializers import (
     FixtureTypeSerializer,
     PlanogramSerializer,
     ProductSerializer,
+    StoreAssetInstanceSerializer,
     StoreAssetTypeSerializer,
     StoreSerializer,
 )
@@ -33,12 +34,18 @@ from apps.catalog.models import (
     PlacementMode,
     StoreAssetType,
 )
+from apps.catalog.seed_data import FAMILY_LABELS
 from apps.core.width_fit import (
     effective_width_mm,
     summarize_carrier,
     validate_scene_width_fit,
 )
-from apps.fixtures.models import ComponentInstance, FixtureInstance, FixtureRun
+from apps.fixtures.models import (
+    ComponentInstance,
+    FixtureInstance,
+    FixtureRun,
+    StoreAssetInstance,
+)
 from apps.layouts.models import StoreLayout
 from apps.planograms.models import Planogram, PlanogramScene
 from apps.products.models import Product
@@ -80,23 +87,99 @@ class AisleViewSet(viewsets.ModelViewSet):
 
 
 class FixtureTypeViewSet(viewsets.ModelViewSet):
-    queryset = FixtureType.objects.filter(is_active=True)
     serializer_class = FixtureTypeSerializer
+
+    def get_queryset(self):
+        qs = FixtureType.objects.filter(is_active=True)
+        family = self.request.query_params.get("family")
+        if family:
+            qs = qs.filter(family=family)
+        q = self.request.query_params.get("q")
+        if q:
+            from django.db.models import Q
+
+            qs = qs.filter(Q(name__icontains=q) | Q(code__icontains=q))
+        tier = self.request.query_params.get("tier")
+        if tier:
+            qs = qs.filter(tier=tier)
+        return qs
+
+    @action(detail=False, methods=["get"])
+    def families(self, request):
+        rows = (
+            FixtureType.objects.filter(is_active=True)
+            .values_list("family")
+            .order_by("family")
+            .distinct()
+        )
+        families = []
+        for (fam,) in rows:
+            families.append(
+                {
+                    "family": fam,
+                    "label": FAMILY_LABELS.get(fam, fam.replace("_", " ").title()),
+                    "count": FixtureType.objects.filter(is_active=True, family=fam).count(),
+                }
+            )
+        return Response(families)
 
 
 class FixtureComponentTypeViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = FixtureComponentType.objects.filter(is_active=True)
     serializer_class = FixtureComponentTypeSerializer
 
+    def get_queryset(self):
+        qs = super().get_queryset()
+        family = self.request.query_params.get("family")
+        if family:
+            qs = qs.filter(family=family)
+        return qs
+
 
 class DisplayAssetTypeViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = DisplayAssetType.objects.filter(is_active=True)
     serializer_class = DisplayAssetTypeSerializer
 
+    def get_queryset(self):
+        qs = super().get_queryset()
+        family = self.request.query_params.get("family")
+        if family:
+            qs = qs.filter(family=family)
+        return qs
+
 
 class StoreAssetTypeViewSet(viewsets.ReadOnlyModelViewSet):
-    queryset = StoreAssetType.objects.filter(is_active=True)
     serializer_class = StoreAssetTypeSerializer
+
+    def get_queryset(self):
+        qs = StoreAssetType.objects.filter(is_active=True)
+        family = self.request.query_params.get("family")
+        if family:
+            qs = qs.filter(family=family)
+        participates = self.request.query_params.get("participates_in_planogram")
+        if participates is not None:
+            val = participates.lower() in ("1", "true", "yes")
+            qs = qs.filter(participates_in_planogram=val)
+        return qs
+
+    @action(detail=False, methods=["get"])
+    def families(self, request):
+        rows = (
+            StoreAssetType.objects.filter(is_active=True)
+            .values_list("family")
+            .order_by("family")
+            .distinct()
+        )
+        out = []
+        for (fam,) in rows:
+            out.append(
+                {
+                    "family": fam,
+                    "label": FAMILY_LABELS.get(fam, fam.replace("_", " ").title()),
+                    "count": StoreAssetType.objects.filter(is_active=True, family=fam).count(),
+                }
+            )
+        return Response(out)
 
 
 class FixtureInstanceViewSet(viewsets.ModelViewSet):
@@ -131,8 +214,8 @@ class FixtureInstanceViewSet(viewsets.ModelViewSet):
         params = dict(ftype.default_params or {})
         params.update(request.data.get("params") or {})
         bay_width = int(params.get("bay_width_mm", 900))
-        shelf_count = int(params.get("shelf_count", 4))
-        shelf_depth = int(params.get("shelf_depth_mm", 400))
+        shelf_count = int(params.get("shelf_count", 0))
+        shelf_depth = int(params.get("shelf_depth_mm", params.get("depth_mm", 400)))
         shelf_pitch = int(params.get("shelf_pitch_mm", 350))
 
         with transaction.atomic():
@@ -150,7 +233,7 @@ class FixtureInstanceViewSet(viewsets.ModelViewSet):
                 aisle_id=request.data.get("aisle_id"),
             )
             shelf_type = FixtureComponentType.objects.filter(code="SHELF_STD").first()
-            if shelf_type:
+            if shelf_type and shelf_count > 0:
                 for i in range(shelf_count):
                     ComponentInstance.objects.create(
                         fixture=inst,
@@ -181,8 +264,8 @@ class FixtureInstanceViewSet(viewsets.ModelViewSet):
             )
         params = dict(ftype.default_params or {})
         bay_width = int(params.get("bay_width_mm", 900))
-        shelf_count = int(params.get("shelf_count", 4))
-        shelf_depth = int(params.get("shelf_depth_mm", 400))
+        shelf_count = int(params.get("shelf_count", 0))
+        shelf_depth = int(params.get("shelf_depth_mm", params.get("depth_mm", 400)))
         shelf_pitch = int(params.get("shelf_pitch_mm", 350))
         start_x = int(request.data.get("x_mm", 0))
         y = int(request.data.get("y_mm", 0))
@@ -212,7 +295,7 @@ class FixtureInstanceViewSet(viewsets.ModelViewSet):
                     aisle_id=aisle_id,
                     department_id=request.data.get("department_id"),
                 )
-                if shelf_type:
+                if shelf_type and shelf_count > 0:
                     for s in range(shelf_count):
                         ComponentInstance.objects.create(
                             fixture=inst,
@@ -228,6 +311,46 @@ class FixtureInstanceViewSet(viewsets.ModelViewSet):
             "bays__components__component_type", "bays__fixture_type"
         ).get(pk=run.pk)
         return Response(FixtureRunSerializer(run).data, status=201)
+
+
+class StoreAssetInstanceViewSet(viewsets.ModelViewSet):
+    serializer_class = StoreAssetInstanceSerializer
+
+    def get_queryset(self):
+        qs = StoreAssetInstance.objects.select_related("asset_type", "store", "layout")
+        store_id = self.request.query_params.get("store")
+        if store_id:
+            qs = qs.filter(store_id=store_id)
+        return qs
+
+    @action(detail=False, methods=["post"], url_path="place")
+    def place(self, request):
+        store = get_object_or_404(Store, pk=request.data.get("store_id"))
+        atype = get_object_or_404(StoreAssetType, pk=request.data.get("asset_type_id"))
+        layout = store.layouts.filter(is_active=True).first()
+        if not layout:
+            layout = StoreLayout.objects.create(
+                store=store, name="Active layout", is_active=True, status="ready"
+            )
+        params = dict(atype.default_params or {})
+        params.update(request.data.get("params") or {})
+        modes = atype.placement_mode_options or [PlacementMode.FLOOR]
+        mode = request.data.get("placement_mode") or modes[0]
+        inst = StoreAssetInstance.objects.create(
+            store=store,
+            layout=layout,
+            asset_type=atype,
+            name=request.data.get("name") or atype.name,
+            x_mm=int(request.data.get("x_mm", 0)),
+            y_mm=int(request.data.get("y_mm", 0)),
+            rotation_deg=float(request.data.get("rotation_deg", 0)),
+            params=params,
+            placement_mode=mode,
+            source="library",
+        )
+        return Response(
+            StoreAssetInstanceSerializer(inst).data, status=status.HTTP_201_CREATED
+        )
 
 
 class ProductViewSet(viewsets.ModelViewSet):

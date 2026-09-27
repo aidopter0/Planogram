@@ -65,14 +65,24 @@ export default function StoresPage() {
       )}
       <div className="grid-stores">
         {stores.map((s) => (
-          <Link key={s.id} to={`/editor?store=${s.id}`} className="store-tile">
-            <span className="badge store">Store-local</span>
-            <h3>{s.name}</h3>
-            <p>
-              {s.code || "—"} · {s.status}
-              {s.cluster_tag ? ` · ${s.cluster_tag}` : ""}
-            </p>
-          </Link>
+          <div key={s.id} className="store-tile" style={{ display: "block" }}>
+            <Link to={`/editor?store=${s.id}`} style={{ color: "inherit", textDecoration: "none" }}>
+              <span className="badge store">Store-local</span>
+              <h3>{s.name}</h3>
+              <p>
+                {s.code || "—"} · {s.status}
+                {s.cluster_tag ? ` · ${s.cluster_tag}` : ""}
+              </p>
+            </Link>
+            <div style={{ marginTop: 12, display: "flex", gap: 8 }}>
+              <Link className="btn ghost" to={`/fixtures?store=${s.id}`}>
+                Fixtures
+              </Link>
+              <Link className="btn" to={`/editor?store=${s.id}`}>
+                Editor
+              </Link>
+            </div>
+          </div>
         ))}
       </div>
     </main>

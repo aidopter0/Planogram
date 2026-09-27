@@ -126,89 +126,14 @@ class Command(BaseCommand):
             self.stdout.write(f"  user {username} ({role})")
 
     def _catalog(self):
-        gondola, _ = FixtureType.objects.update_or_create(
-            code="GONDOLA_900",
-            defaults={
-                "name": "Standard Gondola 900 mm",
-                "family": "gondola",
-                "tier": 1,
-                "default_params": {
-                    "bay_width_mm": 900,
-                    "height_mm": 1600,
-                    "depth_mm": 450,
-                    "shelf_count": 4,
-                    "shelf_pitch_mm": 350,
-                    "shelf_depth_mm": 400,
-                    "faces": 2,
-                },
-                "placement_mode_options": [PlacementMode.FLOOR],
-                "is_active": True,
-            },
+        from django.core.management import call_command
+
+        call_command("seed_catalog")
+        gondola = FixtureType.objects.get(code="GONDOLA_900")
+        self.stdout.write(
+            f"  catalog ready ({FixtureType.objects.count()} fixture types, "
+            f"gondola id={gondola.id})"
         )
-        FixtureType.objects.update_or_create(
-            code="CHILLER_MULTIDECK",
-            defaults={
-                "name": "Open Multideck Chiller",
-                "family": "frozen",
-                "tier": 1,
-                "default_params": {
-                    "bay_width_mm": 1250,
-                    "height_mm": 2000,
-                    "depth_mm": 900,
-                    "shelf_count": 5,
-                    "shelf_pitch_mm": 300,
-                    "shelf_depth_mm": 500,
-                    "faces": 1,
-                },
-                "placement_mode_options": [PlacementMode.FLOOR],
-                "is_active": True,
-            },
-        )
-        FixtureComponentType.objects.update_or_create(
-            code="SHELF_STD",
-            defaults={
-                "name": "Standard Shelf",
-                "family": "shelf",
-                "default_params": {"depth_mm": 400},
-                "placement_mode_options": [PlacementMode.ATTACHED, PlacementMode.SHELF],
-                "reserved_inset_mm": 0,
-                "is_active": True,
-            },
-        )
-        FixtureComponentType.objects.update_or_create(
-            code="DIVIDER",
-            defaults={
-                "name": "Shelf Divider",
-                "family": "divider",
-                "default_params": {},
-                "placement_mode_options": [PlacementMode.SHELF],
-                "reserved_inset_mm": 10,
-                "is_active": True,
-            },
-        )
-        DisplayAssetType.objects.update_or_create(
-            code="ENDCAP",
-            defaults={
-                "name": "Endcap Display",
-                "family": "endcap",
-                "placement_mode_options": [
-                    PlacementMode.FLOOR,
-                    PlacementMode.FIXTURE_FACE,
-                ],
-                "is_active": True,
-            },
-        )
-        StoreAssetType.objects.update_or_create(
-            code="COLUMN",
-            defaults={
-                "name": "Structural Column",
-                "family": "column",
-                "placement_mode_options": [PlacementMode.FLOOR],
-                "participates_in_planogram": False,
-                "is_active": True,
-            },
-        )
-        self.stdout.write(f"  catalog seeded (gondola id={gondola.id})")
 
     def _store(self) -> Store:
         store, _ = Store.objects.update_or_create(
@@ -236,6 +161,9 @@ class Command(BaseCommand):
         )
         beverages, _ = Department.objects.update_or_create(
             store=store, name="Beverages", defaults={"code": "BEV", "sort_order": 2}
+        )
+        produce_dept, _ = Department.objects.update_or_create(
+            store=store, name="Produce", defaults={"code": "PRD", "sort_order": 3}
         )
         aisle, _ = Aisle.objects.update_or_create(
             store=store,
@@ -272,7 +200,76 @@ class Command(BaseCommand):
                         width_mm=900,
                         depth_mm=400,
                     )
-        self.stdout.write(f"  store {store.name} (id={store.id})")
+            # Diverse family instances beyond gondola (store-local)
+            extras = [
+                ("PRODUCE_ISLAND", produce_dept, None, 5000, 2000),
+                ("CHILLER_MULTIDECK", beverages, aisle, 5000, 0),
+                ("FREEZER_ISLAND", grocery, None, 7000, 2000),
+                ("BAKERY_BREAD_RACK", grocery, None, 9000, 0),
+                ("CHECKOUT_COUNTER", None, None, 0, 4000),
+            ]
+            for code, dept, aisle_fk, x, y in extras:
+                ft = FixtureType.objects.filter(code=code).first()
+                if not ft:
+                    continue
+                params = dict(ft.default_params or {})
+                inst = FixtureInstance.objects.create(
+                    store=store,
+                    layout=layout,
+                    fixture_type=ft,
+                    department=dept,
+                    aisle=aisle_fk,
+                    name=ft.name,
+                    x_mm=x,
+                    y_mm=y,
+                    params=params,
+                )
+                sc = int(params.get("shelf_count", 0))
+                if sc > 0 and shelf:
+                    w = int(params.get("bay_width_mm", 900))
+                    d = int(params.get("shelf_depth_mm", params.get("depth_mm", 400)))
+                    pitch = int(params.get("shelf_pitch_mm", 350))
+                    for s in range(sc):
+                        ComponentInstance.objects.create(
+                            fixture=inst,
+                            component_type=shelf,
+                            face="A",
+                            shelf_index=s,
+                            height_mm=200 + s * pitch,
+                            width_mm=w,
+                            depth_mm=d,
+                        )
+
+        # Store assets (viz-only vs planogram-capable)
+        from apps.fixtures.models import StoreAssetInstance
+
+        if not store.store_assets.exists():
+            for code, x, y in [
+                ("COLUMN", 4000, 3000),
+                ("ENTRANCE_PORTAL", 11000, 0),
+                ("TROLLEY_BAY", 200, 5000),
+                ("BASKET_STAND", 800, 5000),
+                ("CATEGORY_SIGN", 4500, 1000),
+                ("DIGITAL_SCREEN", 2000, 5500),
+            ]:
+                at = StoreAssetType.objects.filter(code=code).first()
+                if not at:
+                    continue
+                StoreAssetInstance.objects.create(
+                    store=store,
+                    layout=layout,
+                    asset_type=at,
+                    name=at.name,
+                    x_mm=x,
+                    y_mm=y,
+                    params=dict(at.default_params or {}),
+                    placement_mode=(at.placement_mode_options or ["FLOOR"])[0],
+                )
+
+        self.stdout.write(
+            f"  store {store.name} (id={store.id}) "
+            f"fixtures={store.fixtures.count()} assets={store.store_assets.count()}"
+        )
         return store
 
     def _products(self, from_fixtures: bool):

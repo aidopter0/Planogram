@@ -69,6 +69,7 @@ class StoreAssetType(models.Model):
     name = models.CharField(max_length=200)
     family = models.CharField(max_length=64, default="column")
     placement_mode_options = models.JSONField(default=list, blank=True)
+    default_params = models.JSONField(default=dict, blank=True)
     participates_in_planogram = models.BooleanField(default=False)
     is_active = models.BooleanField(default=True)
 

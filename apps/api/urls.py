@@ -24,6 +24,7 @@ router.register(
     basename="store-asset-types",
 )
 router.register(r"fixtures", views.FixtureInstanceViewSet, basename="fixtures")
+router.register(r"store-assets", views.StoreAssetInstanceViewSet, basename="store-assets")
 router.register(r"products", views.ProductViewSet, basename="products")
 router.register(r"planograms", views.PlanogramViewSet, basename="planograms")
 

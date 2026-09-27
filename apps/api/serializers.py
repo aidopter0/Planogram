@@ -6,7 +6,12 @@ from apps.catalog.models import (
     FixtureType,
     StoreAssetType,
 )
-from apps.fixtures.models import ComponentInstance, FixtureInstance, FixtureRun
+from apps.fixtures.models import (
+    ComponentInstance,
+    FixtureInstance,
+    FixtureRun,
+    StoreAssetInstance,
+)
 from apps.planograms.models import Planogram, PlanogramScene
 from apps.products.models import Product
 from apps.stores.models import Aisle, Department, Store
@@ -93,9 +98,40 @@ class StoreAssetTypeSerializer(serializers.ModelSerializer):
             "name",
             "family",
             "placement_mode_options",
+            "default_params",
             "participates_in_planogram",
             "is_active",
         ]
+
+
+class StoreAssetInstanceSerializer(serializers.ModelSerializer):
+    asset_type_code = serializers.CharField(source="asset_type.code", read_only=True)
+    asset_type_name = serializers.CharField(source="asset_type.name", read_only=True)
+    asset_type_family = serializers.CharField(source="asset_type.family", read_only=True)
+    participates_in_planogram = serializers.BooleanField(read_only=True)
+
+    class Meta:
+        model = StoreAssetInstance
+        fields = [
+            "id",
+            "store",
+            "layout",
+            "asset_type",
+            "asset_type_code",
+            "asset_type_name",
+            "asset_type_family",
+            "name",
+            "x_mm",
+            "y_mm",
+            "rotation_deg",
+            "params",
+            "placement_mode",
+            "source",
+            "participates_in_planogram",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["created_at", "updated_at"]
 
 
 class ComponentInstanceSerializer(serializers.ModelSerializer):

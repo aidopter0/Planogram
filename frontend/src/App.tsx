@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { NavLink, Navigate, Route, Routes } from "react-router-dom";
 import { api, ensureCsrf, type User } from "./api";
 import EditorPage from "./pages/EditorPage";
+import FixturesPage from "./pages/FixturesPage";
 import ProductsPage from "./pages/ProductsPage";
 import StoresPage from "./pages/StoresPage";
 
@@ -47,6 +48,7 @@ export default function App() {
           <NavLink to="/" end>
             Stores
           </NavLink>
+          <NavLink to="/fixtures">Fixtures</NavLink>
           <NavLink to="/products">Product Master</NavLink>
           <NavLink to="/editor">Editor</NavLink>
         </nav>
@@ -60,6 +62,7 @@ export default function App() {
       </header>
       <Routes>
         <Route path="/" element={<StoresPage />} />
+        <Route path="/fixtures" element={<FixturesPage />} />
         <Route path="/products" element={<ProductsPage />} />
         <Route path="/editor" element={<EditorPage />} />
         <Route path="/editor/:planogramId" element={<EditorPage />} />

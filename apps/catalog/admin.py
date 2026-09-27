@@ -6,7 +6,7 @@ from apps.catalog.models import (
     FixtureType,
     StoreAssetType,
 )
-from apps.fixtures.models import ComponentInstance, FixtureInstance, FixtureRun
+from apps.fixtures.models import ComponentInstance, FixtureInstance, FixtureRun, StoreAssetInstance
 from apps.layouts.models import IngestJob, StoreLayout
 from apps.planograms.models import Planogram, PlanogramScene
 from apps.products.models import Product, ProductImportJob
@@ -24,6 +24,7 @@ admin.site.register(StoreAssetType)
 admin.site.register(FixtureRun)
 admin.site.register(FixtureInstance)
 admin.site.register(ComponentInstance)
+admin.site.register(StoreAssetInstance)
 admin.site.register(Product)
 admin.site.register(ProductImportJob)
 admin.site.register(Planogram)
