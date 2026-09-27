@@ -11,6 +11,8 @@ urlpatterns = [
     path("accounts/", include("apps.accounts.urls")),
     path("login/", LoginPageView.as_view(), name="login"),
     path("", SpaView.as_view(), name="spa"),
+    # Client-side routes (React Router) — keep after API/admin/login
+    path("<path:spa_path>", SpaView.as_view(), name="spa-path"),
 ]
 
 if settings.DEBUG:
