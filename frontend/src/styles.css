@@ -633,6 +633,37 @@ table.data tr:last-child td {
   flex-shrink: 0;
 }
 
+.zoom-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.zoom-controls .btn {
+  min-width: 36px;
+  padding: 6px 10px;
+  font-family: var(--font-mono);
+}
+
+.status-chip {
+  font-size: 0.75rem;
+  color: var(--slate-600);
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.elevation-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 12px;
+  min-height: 280px;
+  padding: 32px;
+}
+
 .canvas-body {
   display: grid;
   grid-template-columns: 280px 1fr;

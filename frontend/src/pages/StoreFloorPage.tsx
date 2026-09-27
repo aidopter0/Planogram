@@ -43,6 +43,8 @@ type ComponentInstance = {
   available_width_mm: number;
   reserved_insets_mm: number;
   height_mm: number;
+  component_type_code?: string;
+  params?: { kind?: string };
 };
 
 type FixtureInstance = {
@@ -124,6 +126,12 @@ function footprint(fi: FixtureInstance) {
   return { w, d };
 }
 
+function carrierLabel(c: ComponentInstance): string {
+  const code = (c.component_type_code || "").toUpperCase();
+  if (code === "WELL" || c.params?.kind === "well") return "Well / surface";
+  return `Shelf ${c.shelf_index + 1}`;
+}
+
 export default function StoreFloorPage() {
   const { storeId } = useParams();
   const navigate = useNavigate();
@@ -149,9 +157,15 @@ export default function StoreFloorPage() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [dragOver, setDragOver] = useState(false);
+  const [zoom, setZoom] = useState(1);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
 
   const svgRef = useRef<SVGSVGElement>(null);
+  const floorStageRef = useRef<HTMLDivElement>(null);
   const draggingPose = useRef<{ id: number; ox: number; oy: number } | null>(null);
+  const panning = useRef<{ ox: number; oy: number; panX: number; panY: number } | null>(
+    null,
+  );
 
   const selected = fixtures.find((f) => f.id === selectedId) || null;
 
@@ -163,6 +177,24 @@ export default function StoreFloorPage() {
     const maxY = (layout?.extent_max_y ?? 18000) + pad;
     return { minX, minY, maxX, maxY, w: maxX - minX, h: maxY - minY };
   }, [layout]);
+
+  const viewBox = useMemo(() => {
+    const z = Math.max(0.25, Math.min(8, zoom));
+    const vw = extent.w / z;
+    const vh = extent.h / z;
+    const cx = (extent.minX + extent.maxX) / 2 + pan.x;
+    const cy = (extent.minY + extent.maxY) / 2 + pan.y;
+    // SVG y flipped via transform; viewBox y is negative of max world y
+    const minX = cx - vw / 2;
+    const maxY = cy + vh / 2;
+    return `${minX} ${-maxY} ${vw} ${vh}`;
+  }, [extent, zoom, pan]);
+
+  function backToFloor() {
+    setSelectedId(null);
+    setCarrierId(null);
+    setStatus("");
+  }
 
   const productsById = useMemo(() => {
     const m: Record<number, Product> = {};
@@ -231,52 +263,88 @@ export default function StoreFloorPage() {
   }, [family]);
 
   useEffect(() => {
-    if (!selected) {
+    if (!selectedId) {
       setPlanogram(null);
       return;
     }
+    let cancelled = false;
     (async () => {
-      const pogs = listify(
-        await api<{ results?: Planogram[] } | Planogram[]>(
-          `/api/planograms/?store=${sid}`,
-        ),
-      );
-      let pog =
-        pogs.find((p) => (p.target_fixture_ids || []).includes(selected.id)) ||
-        null;
-      if (!pog) {
-        pog = await api<Planogram>("/api/planograms/", {
-          method: "POST",
-          body: JSON.stringify({
-            store: sid,
-            name: `${selected.name} planogram`,
-            target_fixture_ids: [selected.id],
-            status: "draft",
-          }),
+      try {
+        // Always ensure well/shelf carriers exist (bins, tables, etc.)
+        const fi = await api<FixtureInstance>(
+          `/api/fixtures/${selectedId}/ensure-carriers/`,
+          { method: "POST", body: "{}" },
+        );
+        if (cancelled) return;
+        setFixtures((prev) => prev.map((f) => (f.id === fi.id ? fi : f)));
+
+        const pogs = listify(
+          await api<{ results?: Planogram[] } | Planogram[]>(
+            `/api/planograms/?store=${sid}`,
+          ),
+        );
+        let pog =
+          pogs.find((p) => (p.target_fixture_ids || []).includes(fi.id)) || null;
+        if (!pog) {
+          pog = await api<Planogram>("/api/planograms/", {
+            method: "POST",
+            body: JSON.stringify({
+              store: sid,
+              name: `${fi.name} planogram`,
+              target_fixture_ids: [fi.id],
+              status: "draft",
+            }),
+          });
+        }
+        if (cancelled) return;
+        setPlanogram(pog);
+        const scene = await api<{ graph: SceneGraph; updated_at: string }>(
+          `/api/planograms/${pog.id}/scene/`,
+        );
+        if (cancelled) return;
+        setGraph(scene.graph);
+        setPlanogram({
+          ...pog,
+          scene: { graph: scene.graph, updated_at: scene.updated_at },
         });
+        setCarrierId(fi.components[0]?.id ?? null);
+        if (fi.components.length === 0) {
+          setStatus("No merchandising surface for this fixture — use Back to floor");
+        }
+      } catch (e) {
+        if (!cancelled) {
+          setStatus(e instanceof Error ? e.message : "Planogram load failed");
+        }
       }
-      setPlanogram(pog);
-      const scene = await api<{ graph: SceneGraph; updated_at: string }>(
-        `/api/planograms/${pog.id}/scene/`,
-      );
-      setGraph(scene.graph);
-      setPlanogram({
-        ...pog,
-        scene: { graph: scene.graph, updated_at: scene.updated_at },
-      });
-      setCarrierId(selected.components[0]?.id ?? null);
-    })().catch((e) =>
-      setStatus(e instanceof Error ? e.message : "Planogram load failed"),
-    );
-  }, [selected?.id, sid]);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedId, sid]);
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") setSelectedId(null);
+      if (e.key === "Escape" && selectedId != null) {
+        e.preventDefault();
+        backToFloor();
+      }
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, []);
+  }, [selectedId]);
+
+  // Non-passive wheel so zoom preventDefault works in Chromium
+  useEffect(() => {
+    const el = floorStageRef.current;
+    if (!el || selectedId != null) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const factor = e.deltaY > 0 ? 1 / 1.12 : 1.12;
+      setZoom((z) => Math.max(0.25, Math.min(8, +(z * factor).toFixed(3))));
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, [selectedId]);
 
   function clientToWorld(clientX: number, clientY: number) {
     const svg = svgRef.current;
@@ -338,7 +406,11 @@ export default function StoreFloorPage() {
       carrier_ref: {
         fixture_instance_id: selected.id,
         component_instance_id: activeCarrier.id,
-        kind: "shelf",
+        kind:
+          activeCarrier.component_type_code === "WELL" ||
+          activeCarrier.params?.kind === "well"
+            ? "well"
+            : "shelf",
         face: activeCarrier.face,
         index: activeCarrier.shelf_index,
       },
@@ -382,8 +454,6 @@ export default function StoreFloorPage() {
   if (loading) return <div className="loading">Opening floor layout…</div>;
   if (error) return <div className="error">{error}</div>;
 
-  const viewBox = `${extent.minX} ${-extent.maxY} ${extent.w} ${extent.h}`;
-
   return (
     <div className="page wide canvas-shell">
       <div className="canvas-top">
@@ -400,14 +470,42 @@ export default function StoreFloorPage() {
         )}
         <div style={{ flex: 1 }} />
         {status && (
-          <span className="mono" style={{ fontSize: "0.8rem", color: "var(--emerald-700)" }}>
-            {status}
-          </span>
+          <span className="mono status-chip">{status}</span>
         )}
-        {selected && (
-          <button className="btn ghost" type="button" onClick={() => setSelectedId(null)}>
-            Back to floor (Esc)
+        {selected ? (
+          <button className="btn" type="button" onClick={backToFloor}>
+            ← Back to floor
           </button>
+        ) : (
+          <div className="zoom-controls">
+            <button
+              className="btn ghost"
+              type="button"
+              title="Zoom out"
+              onClick={() => setZoom((z) => Math.max(0.25, +(z / 1.25).toFixed(3)))}
+            >
+              −
+            </button>
+            <button
+              className="btn ghost"
+              type="button"
+              title="Reset zoom"
+              onClick={() => {
+                setZoom(1);
+                setPan({ x: 0, y: 0 });
+              }}
+            >
+              {Math.round(zoom * 100)}%
+            </button>
+            <button
+              className="btn ghost"
+              type="button"
+              title="Zoom in"
+              onClick={() => setZoom((z) => Math.min(8, +(z * 1.25).toFixed(3)))}
+            >
+              +
+            </button>
+          </div>
         )}
       </div>
 
@@ -512,6 +610,7 @@ export default function StoreFloorPage() {
 
         {!selected ? (
           <div
+            ref={floorStageRef}
             className={`floor-stage ${dragOver ? "drop-active" : ""}`}
             onDragOver={(e) => {
               e.preventDefault();
@@ -528,6 +627,40 @@ export default function StoreFloorPage() {
                 dropFixtureType(ft, e.clientX, e.clientY);
               } catch {
                 /* ignore */
+              }
+            }}
+            onMouseDown={(e) => {
+              // Middle button or Shift+left = pan
+              if (e.button === 1 || (e.button === 0 && e.shiftKey)) {
+                e.preventDefault();
+                panning.current = {
+                  ox: e.clientX,
+                  oy: e.clientY,
+                  panX: pan.x,
+                  panY: pan.y,
+                };
+                const onMove = (ev: MouseEvent) => {
+                  if (!panning.current) return;
+                  const dx = ev.clientX - panning.current.ox;
+                  const dy = ev.clientY - panning.current.oy;
+                  // Approximate screen px → world mm using current view size
+                  const svg = svgRef.current;
+                  if (!svg) return;
+                  const rect = svg.getBoundingClientRect();
+                  const worldPerPxX = extent.w / zoom / Math.max(1, rect.width);
+                  const worldPerPxY = extent.h / zoom / Math.max(1, rect.height);
+                  setPan({
+                    x: panning.current.panX - dx * worldPerPxX,
+                    y: panning.current.panY + dy * worldPerPxY,
+                  });
+                };
+                const onUp = () => {
+                  panning.current = null;
+                  window.removeEventListener("mousemove", onMove);
+                  window.removeEventListener("mouseup", onUp);
+                };
+                window.addEventListener("mousemove", onMove);
+                window.addEventListener("mouseup", onUp);
               }
             }}
           >
@@ -672,13 +805,14 @@ export default function StoreFloorPage() {
             }}
           >
             <div className="elevation-header">
-              <div>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                <button className="btn" type="button" onClick={backToFloor}>
+                  ← Back to floor
+                </button>
                 <strong>{selected.name}</strong>
-                <span className="badge store" style={{ marginLeft: 8 }}>
-                  Elevation · placements SoT
-                </span>
+                <span className="badge store">Elevation · Esc to exit</span>
               </div>
-              <button className="btn" type="button" onClick={saveScene}>
+              <button className="btn ghost" type="button" onClick={saveScene}>
                 Save
               </button>
             </div>
@@ -690,40 +824,54 @@ export default function StoreFloorPage() {
                   className={`chip ${c.id === activeCarrier?.id ? "active" : ""}`}
                   onClick={() => setCarrierId(c.id)}
                 >
-                  Shelf {c.shelf_index + 1}
+                  {carrierLabel(c)}
                 </button>
               ))}
               {selected.components.length === 0 && (
-                <span className="page-sub">No shelf carriers on this fixture</span>
+                <span className="page-sub">
+                  No carriers yet — Back to floor is always available (Esc).
+                </span>
               )}
             </div>
             <div className="elevation-canvas-wrap">
               {activeCarrier ? (
-                <ElevationCanvas
-                  carrierWidthMm={activeCarrier.width_mm}
-                  availableWidthMm={activeCarrier.available_width_mm}
-                  placements={carrierPlacements}
-                  productsById={productsById}
-                />
-              ) : (
-                <div className="empty">This fixture has no shelves to merchandise.</div>
-              )}
-              <div className="on-canvas-meter">
-                <div className="track">
-                  <div
-                    className={`used ${remaining < 0 ? "overflow" : ""}`}
-                    style={{
-                      width: `${Math.min(100, (usedWidth / Math.max(1, avail)) * 100)}%`,
-                    }}
+                <>
+                  <ElevationCanvas
+                    carrierWidthMm={activeCarrier.width_mm}
+                    availableWidthMm={activeCarrier.available_width_mm}
+                    placements={carrierPlacements}
+                    productsById={productsById}
                   />
+                  <div className="on-canvas-meter">
+                    <div className="track">
+                      <div
+                        className={`used ${remaining < 0 ? "overflow" : ""}`}
+                        style={{
+                          width: `${Math.min(100, (usedWidth / Math.max(1, avail)) * 100)}%`,
+                        }}
+                      />
+                    </div>
+                    <div className={`meta ${remaining < 0 ? "warn" : ""}`}>
+                      <span>
+                        {usedWidth} / {avail} mm
+                      </span>
+                      <span>
+                        {remaining < 0 ? `overflow ${-remaining}` : `free ${remaining}`}
+                      </span>
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <div className="empty elevation-empty">
+                  <p>This fixture has no shelves or well to merchandise.</p>
+                  <p className="page-sub">
+                    You are not stuck — return to the floor and pick another fixture.
+                  </p>
+                  <button className="btn" type="button" onClick={backToFloor}>
+                    ← Back to floor
+                  </button>
                 </div>
-                <div className={`meta ${remaining < 0 ? "warn" : ""}`}>
-                  <span>
-                    {usedWidth} / {avail} mm
-                  </span>
-                  <span>{remaining < 0 ? `overflow ${-remaining}` : `free ${remaining}`}</span>
-                </div>
-              </div>
+              )}
             </div>
           </div>
         )}

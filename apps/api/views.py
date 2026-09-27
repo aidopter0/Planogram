@@ -42,6 +42,7 @@ from apps.core.width_fit import (
     summarize_carrier,
     validate_scene_width_fit,
 )
+from apps.fixtures.carriers import create_carriers_for_instance
 from apps.fixtures.models import (
     ComponentInstance,
     FixtureInstance,
@@ -310,10 +311,6 @@ class FixtureInstanceViewSet(viewsets.ModelViewSet):
 
         params = dict(ftype.default_params or {})
         params.update(request.data.get("params") or {})
-        bay_width = int(params.get("bay_width_mm", 900))
-        shelf_count = int(params.get("shelf_count", 0))
-        shelf_depth = int(params.get("shelf_depth_mm", params.get("depth_mm", 400)))
-        shelf_pitch = int(params.get("shelf_pitch_mm", 350))
 
         with transaction.atomic():
             inst = FixtureInstance.objects.create(
@@ -329,22 +326,23 @@ class FixtureInstanceViewSet(viewsets.ModelViewSet):
                 department_id=request.data.get("department_id"),
                 aisle_id=request.data.get("aisle_id"),
             )
-            shelf_type = FixtureComponentType.objects.filter(code="SHELF_STD").first()
-            if shelf_type and shelf_count > 0:
-                for i in range(shelf_count):
-                    ComponentInstance.objects.create(
-                        fixture=inst,
-                        component_type=shelf_type,
-                        face="A",
-                        shelf_index=i,
-                        height_mm=200 + i * shelf_pitch,
-                        width_mm=bay_width,
-                        depth_mm=shelf_depth,
-                        reserved_insets_mm=0,
-                    )
+            create_carriers_for_instance(inst)
+        inst = FixtureInstance.objects.prefetch_related(
+            "components__component_type"
+        ).get(pk=inst.pk)
         return Response(
             FixtureInstanceSerializer(inst).data, status=status.HTTP_201_CREATED
         )
+
+    @action(detail=True, methods=["post"], url_path="ensure-carriers")
+    def ensure_carriers(self, request, pk=None):
+        """Create well/shelf carriers if missing (e.g. produce bin)."""
+        inst = self.get_object()
+        create_carriers_for_instance(inst)
+        inst = FixtureInstance.objects.prefetch_related(
+            "components__component_type"
+        ).get(pk=inst.pk)
+        return Response(FixtureInstanceSerializer(inst).data)
 
     @action(detail=True, methods=["patch"], url_path="pose")
     def pose(self, request, pk=None):
@@ -374,13 +372,9 @@ class FixtureInstanceViewSet(viewsets.ModelViewSet):
             )
         params = dict(ftype.default_params or {})
         bay_width = int(params.get("bay_width_mm", 900))
-        shelf_count = int(params.get("shelf_count", 0))
-        shelf_depth = int(params.get("shelf_depth_mm", params.get("depth_mm", 400)))
-        shelf_pitch = int(params.get("shelf_pitch_mm", 350))
         start_x = int(request.data.get("x_mm", 0))
         y = int(request.data.get("y_mm", 0))
         aisle_id = request.data.get("aisle_id")
-        shelf_type = FixtureComponentType.objects.filter(code="SHELF_STD").first()
 
         with transaction.atomic():
             run = FixtureRun.objects.create(
@@ -405,17 +399,7 @@ class FixtureInstanceViewSet(viewsets.ModelViewSet):
                     aisle_id=aisle_id,
                     department_id=request.data.get("department_id"),
                 )
-                if shelf_type and shelf_count > 0:
-                    for s in range(shelf_count):
-                        ComponentInstance.objects.create(
-                            fixture=inst,
-                            component_type=shelf_type,
-                            face="A",
-                            shelf_index=s,
-                            height_mm=200 + s * shelf_pitch,
-                            width_mm=bay_width,
-                            depth_mm=shelf_depth,
-                        )
+                create_carriers_for_instance(inst)
                 created.append(inst)
         run = FixtureRun.objects.prefetch_related(
             "bays__components__component_type", "bays__fixture_type"

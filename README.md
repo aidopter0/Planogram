@@ -24,8 +24,8 @@ Open **[http://127.0.0.1:8451/login/](http://127.0.0.1:8451/login/)** — `desig
 ### Visual canvas journey
 
 1. **New store** → upload DWG/DXF/RVT/IFC (sample DXF: `/media/layouts/sample-store.dxf`) → floor opens  
-2. **Floor canvas** → drag fixtures from the left org library onto the CAD underlay  
-3. **Click a fixture** → elevation / shelf strip → drag pack-front products onto shelves (width meter on canvas). Esc returns to floor.
+2. **Floor canvas** → drag fixtures from the left org library onto the CAD underlay · **zoom** (− / % / + or mouse wheel) · Shift-drag or middle-drag to pan  
+3. **Click a fixture** → elevation (shelves or bin **well / surface**) → drag pack-front products (width meter on canvas). **Back to floor** and **Esc** always exit — never a dead end.
 
 | User | Password | Role |
 | --- | --- | --- |

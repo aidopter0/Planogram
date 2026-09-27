@@ -118,6 +118,7 @@ COMPONENT_TYPES: list[tuple] = [
     ("PEG_HOOK", "Peg hook", "hanging", {}, PEG, 0),
     ("WIRE_BASKET", "Wire basket", "basket", {}, ATTACHED, 0),
     ("BIN", "Bin", "basket", {}, ATTACHED, 0),
+    ("WELL", "Merchandising well / surface", "well", {}, [PM.FLOOR, PM.SHELF], 0),
 ]
 
 DISPLAY_ASSET_TYPES: list[tuple] = [
