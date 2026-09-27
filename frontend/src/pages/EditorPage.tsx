@@ -121,16 +121,43 @@ export default function EditorPage() {
         setProducts(prods);
         const pog = pogs[0] || null;
         setPlanogram(pog);
+        let loadedGraph: SceneGraph = {
+          schema_version: 5,
+          units: "mm",
+          blocks: [],
+          placements: [],
+        };
         if (pog?.scene?.graph) {
-          setGraph(pog.scene.graph);
+          loadedGraph = pog.scene.graph;
         } else if (pog) {
           const scene = await api<{ graph: SceneGraph }>(
             `/api/planograms/${pog.id}/scene/`,
           );
-          setGraph(scene.graph);
+          loadedGraph = scene.graph;
         }
-        const firstCarrier = fx[0]?.components?.[0]?.id ?? null;
-        setCarrierId(firstCarrier);
+        setGraph(loadedGraph);
+
+        // Prefer the carrier that already has placements (seeded shelf),
+        // otherwise first component on the target fixture.
+        const counts = new Map<number, number>();
+        for (const p of loadedGraph.placements || []) {
+          const cid = p.carrier_ref?.component_instance_id;
+          if (cid != null) counts.set(cid, (counts.get(cid) || 0) + 1);
+        }
+        let preferred: number | null = null;
+        let best = 0;
+        counts.forEach((n, cid) => {
+          if (n > best) {
+            best = n;
+            preferred = cid;
+          }
+        });
+        const fallback =
+          fx.find((f) => (pog?.target_fixture_ids || []).includes(f.id))
+            ?.components?.[0]?.id ??
+          fx[0]?.components?.[0]?.id ??
+          null;
+        setCarrierId(preferred ?? fallback);
       } catch (e) {
         setError(e instanceof Error ? e.message : "Failed to load editor");
       } finally {
@@ -194,6 +221,18 @@ export default function EditorPage() {
         }),
       });
       setGraph(res.graph);
+      setPlanogram((prev) =>
+        prev
+          ? {
+              ...prev,
+              scene: {
+                schema_version: 5,
+                graph: res.graph,
+                updated_at: res.updated_at,
+              },
+            }
+          : prev,
+      );
       setStatus(
         res.validation.ok
           ? "Saved — width-fit OK"
@@ -224,6 +263,11 @@ export default function EditorPage() {
             Elevation · width-fit (not optimization)
           </span>
           <div style={{ flex: 1 }} />
+          {status && (
+            <span className="mono" style={{ fontSize: "0.8rem", color: "var(--emerald-700)" }}>
+              {status}
+            </span>
+          )}
           <button className="btn ghost" type="button" onClick={saveScene}>
             Save
           </button>
@@ -231,13 +275,12 @@ export default function EditorPage() {
 
         <aside className="editor-side">
           <p className="panel-title">Products</p>
+          <p className="page-sub" style={{ marginTop: 0 }}>
+            Click <strong>+1</strong> to place one facing on the selected shelf
+            (width-fit). No drag required.
+          </p>
           {products.map((p) => (
-            <div
-              key={p.id}
-              className="product-row"
-              onDoubleClick={() => placeProduct(p, 1)}
-              title="Double-click to place on selected shelf"
-            >
+            <div key={p.id} className="product-row">
               {p.front_image_url ? (
                 <img src={p.front_image_url} alt="" />
               ) : (
@@ -251,10 +294,14 @@ export default function EditorPage() {
                 </div>
               </div>
               <button
-                className="btn ghost"
+                className="btn"
                 type="button"
-                style={{ marginLeft: "auto", padding: "4px 8px" }}
-                onClick={() => placeProduct(p, 1)}
+                style={{ marginLeft: "auto", padding: "4px 10px" }}
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  placeProduct(p, 1);
+                }}
               >
                 +1
               </button>
@@ -276,28 +323,7 @@ export default function EditorPage() {
         </div>
 
         <aside className="editor-props">
-          <p className="panel-title">Carriers</p>
-          <div className="carrier-list">
-            {carriers.map((c) => (
-              <button
-                key={c.id}
-                type="button"
-                className={c.id === activeCarrier?.id ? "active" : ""}
-                onClick={() => setCarrierId(c.id)}
-              >
-                <div>
-                  {c.fixtureName} · Face {c.face} · Shelf {c.shelf_index + 1}
-                </div>
-                <div className="mono" style={{ color: "var(--text-muted)" }}>
-                  avail {c.available_width_mm} mm
-                </div>
-              </button>
-            ))}
-          </div>
-
-          <p className="panel-title" style={{ marginTop: 16 }}>
-            Width meter
-          </p>
+          <p className="panel-title">Width meter</p>
           <div className="width-meter">
             <div className="track">
               <div
@@ -318,10 +344,36 @@ export default function EditorPage() {
           </div>
 
           <p className="panel-title" style={{ marginTop: 16 }}>
+            Carriers
+          </p>
+          <div className="carrier-list">
+            {carriers.map((c) => {
+              const used = (graph.placements || [])
+                .filter((p) => p.carrier_ref?.component_instance_id === c.id)
+                .reduce((s, p) => s + (p.width_consumed_mm || 0), 0);
+              return (
+                <button
+                  key={c.id}
+                  type="button"
+                  className={c.id === activeCarrier?.id ? "active" : ""}
+                  onClick={() => setCarrierId(c.id)}
+                >
+                  <div>
+                    {c.fixtureName} · Face {c.face} · Shelf {c.shelf_index + 1}
+                  </div>
+                  <div className="mono" style={{ color: "var(--text-muted)" }}>
+                    used {used} / {c.available_width_mm} mm
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+
+          <p className="panel-title" style={{ marginTop: 16 }}>
             Placements
           </p>
           {carrierPlacements.length === 0 && (
-            <p className="page-sub">Double-click a product to place.</p>
+            <p className="page-sub">Click +1 on a product to place here.</p>
           )}
           {carrierPlacements.map((p) => (
             <div key={p.id} style={{ fontSize: "0.85rem", marginBottom: 6 }}>
@@ -329,7 +381,6 @@ export default function EditorPage() {
               {p.width_consumed_mm} mm
             </div>
           ))}
-          {status && <p className="page-sub">{status}</p>}
         </aside>
       </div>
     </div>
