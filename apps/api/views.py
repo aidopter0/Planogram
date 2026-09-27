@@ -1,0 +1,518 @@
+from __future__ import annotations
+
+import uuid
+from typing import Any
+
+from django.db import transaction
+from django.shortcuts import get_object_or_404
+from django.utils import timezone
+from rest_framework import mixins, status, viewsets
+from rest_framework.decorators import action, api_view, permission_classes
+from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework.response import Response
+from rest_framework.views import APIView
+
+from apps.api.serializers import (
+    AisleSerializer,
+    ComponentInstanceSerializer,
+    DepartmentSerializer,
+    DisplayAssetTypeSerializer,
+    FixtureComponentTypeSerializer,
+    FixtureInstanceSerializer,
+    FixtureRunSerializer,
+    FixtureTypeSerializer,
+    PlanogramSerializer,
+    ProductSerializer,
+    StoreAssetTypeSerializer,
+    StoreSerializer,
+)
+from apps.catalog.models import (
+    DisplayAssetType,
+    FixtureComponentType,
+    FixtureType,
+    PlacementMode,
+    StoreAssetType,
+)
+from apps.core.width_fit import (
+    effective_width_mm,
+    summarize_carrier,
+    validate_scene_width_fit,
+)
+from apps.fixtures.models import ComponentInstance, FixtureInstance, FixtureRun
+from apps.layouts.models import StoreLayout
+from apps.planograms.models import Planogram, PlanogramScene
+from apps.products.models import Product
+from apps.products.services import import_products_csv
+from apps.stores.models import Aisle, Department, Store
+
+
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def healthz(request):
+    return Response({"status": "ok", "service": "planogram"})
+
+
+class StoreViewSet(viewsets.ModelViewSet):
+    queryset = Store.objects.all()
+    serializer_class = StoreSerializer
+
+    @action(detail=True, methods=["get"])
+    def departments(self, request, pk=None):
+        store = self.get_object()
+        qs = store.departments.all()
+        return Response(DepartmentSerializer(qs, many=True).data)
+
+    @action(detail=True, methods=["get"])
+    def aisles(self, request, pk=None):
+        store = self.get_object()
+        qs = store.aisles.all()
+        return Response(AisleSerializer(qs, many=True).data)
+
+
+class DepartmentViewSet(viewsets.ModelViewSet):
+    queryset = Department.objects.select_related("store")
+    serializer_class = DepartmentSerializer
+
+
+class AisleViewSet(viewsets.ModelViewSet):
+    queryset = Aisle.objects.select_related("store", "department")
+    serializer_class = AisleSerializer
+
+
+class FixtureTypeViewSet(viewsets.ModelViewSet):
+    queryset = FixtureType.objects.filter(is_active=True)
+    serializer_class = FixtureTypeSerializer
+
+
+class FixtureComponentTypeViewSet(viewsets.ReadOnlyModelViewSet):
+    queryset = FixtureComponentType.objects.filter(is_active=True)
+    serializer_class = FixtureComponentTypeSerializer
+
+
+class DisplayAssetTypeViewSet(viewsets.ReadOnlyModelViewSet):
+    queryset = DisplayAssetType.objects.filter(is_active=True)
+    serializer_class = DisplayAssetTypeSerializer
+
+
+class StoreAssetTypeViewSet(viewsets.ReadOnlyModelViewSet):
+    queryset = StoreAssetType.objects.filter(is_active=True)
+    serializer_class = StoreAssetTypeSerializer
+
+
+class FixtureInstanceViewSet(viewsets.ModelViewSet):
+    serializer_class = FixtureInstanceSerializer
+
+    def get_queryset(self):
+        qs = FixtureInstance.objects.select_related(
+            "fixture_type", "store", "layout"
+        ).prefetch_related("components__component_type")
+        store_id = self.request.query_params.get("store")
+        if store_id:
+            qs = qs.filter(store_id=store_id)
+        return qs
+
+    @action(detail=False, methods=["post"], url_path="place")
+    def place(self, request):
+        """Place a single Fixture Instance on a store layout (minimal)."""
+        store_id = request.data.get("store_id")
+        fixture_type_id = request.data.get("fixture_type_id")
+        layout_id = request.data.get("layout_id")
+        store = get_object_or_404(Store, pk=store_id)
+        ftype = get_object_or_404(FixtureType, pk=fixture_type_id)
+        if layout_id:
+            layout = get_object_or_404(StoreLayout, pk=layout_id, store=store)
+        else:
+            layout = store.layouts.filter(is_active=True).first()
+            if not layout:
+                layout = StoreLayout.objects.create(
+                    store=store, name="Active layout", is_active=True, status="ready"
+                )
+
+        params = dict(ftype.default_params or {})
+        params.update(request.data.get("params") or {})
+        bay_width = int(params.get("bay_width_mm", 900))
+        shelf_count = int(params.get("shelf_count", 4))
+        shelf_depth = int(params.get("shelf_depth_mm", 400))
+        shelf_pitch = int(params.get("shelf_pitch_mm", 350))
+
+        with transaction.atomic():
+            inst = FixtureInstance.objects.create(
+                store=store,
+                layout=layout,
+                fixture_type=ftype,
+                name=request.data.get("name") or f"{ftype.code}-1",
+                x_mm=int(request.data.get("x_mm", 0)),
+                y_mm=int(request.data.get("y_mm", 0)),
+                rotation_deg=float(request.data.get("rotation_deg", 0)),
+                params=params,
+                placement_mode=request.data.get("placement_mode", PlacementMode.FLOOR),
+                department_id=request.data.get("department_id"),
+                aisle_id=request.data.get("aisle_id"),
+            )
+            shelf_type = FixtureComponentType.objects.filter(code="SHELF_STD").first()
+            if shelf_type:
+                for i in range(shelf_count):
+                    ComponentInstance.objects.create(
+                        fixture=inst,
+                        component_type=shelf_type,
+                        face="A",
+                        shelf_index=i,
+                        height_mm=200 + i * shelf_pitch,
+                        width_mm=bay_width,
+                        depth_mm=shelf_depth,
+                        reserved_insets_mm=0,
+                    )
+        return Response(
+            FixtureInstanceSerializer(inst).data, status=status.HTTP_201_CREATED
+        )
+
+    @action(detail=False, methods=["post"], url_path="batch-bays")
+    def batch_bays(self, request):
+        """D1 Must: Create N bays of selected Fixture Type."""
+        store = get_object_or_404(Store, pk=request.data.get("store_id"))
+        ftype = get_object_or_404(FixtureType, pk=request.data.get("fixture_type_id"))
+        n = int(request.data.get("bay_count", 1))
+        if n < 1 or n > 50:
+            return Response({"detail": "bay_count must be 1–50"}, status=400)
+        layout = store.layouts.filter(is_active=True).first()
+        if not layout:
+            layout = StoreLayout.objects.create(
+                store=store, name="Active layout", is_active=True, status="ready"
+            )
+        params = dict(ftype.default_params or {})
+        bay_width = int(params.get("bay_width_mm", 900))
+        shelf_count = int(params.get("shelf_count", 4))
+        shelf_depth = int(params.get("shelf_depth_mm", 400))
+        shelf_pitch = int(params.get("shelf_pitch_mm", 350))
+        start_x = int(request.data.get("x_mm", 0))
+        y = int(request.data.get("y_mm", 0))
+        aisle_id = request.data.get("aisle_id")
+        shelf_type = FixtureComponentType.objects.filter(code="SHELF_STD").first()
+
+        with transaction.atomic():
+            run = FixtureRun.objects.create(
+                store=store,
+                layout=layout,
+                name=request.data.get("name") or f"{ftype.code} × {n}",
+                bay_count=n,
+            )
+            created = []
+            for i in range(n):
+                inst = FixtureInstance.objects.create(
+                    store=store,
+                    layout=layout,
+                    fixture_type=ftype,
+                    run=run,
+                    bay_index=i,
+                    name=f"{ftype.code}-B{i + 1}",
+                    x_mm=start_x + i * bay_width,
+                    y_mm=y,
+                    rotation_deg=float(request.data.get("rotation_deg", 0)),
+                    params=params,
+                    aisle_id=aisle_id,
+                    department_id=request.data.get("department_id"),
+                )
+                if shelf_type:
+                    for s in range(shelf_count):
+                        ComponentInstance.objects.create(
+                            fixture=inst,
+                            component_type=shelf_type,
+                            face="A",
+                            shelf_index=s,
+                            height_mm=200 + s * shelf_pitch,
+                            width_mm=bay_width,
+                            depth_mm=shelf_depth,
+                        )
+                created.append(inst)
+        run = FixtureRun.objects.prefetch_related(
+            "bays__components__component_type", "bays__fixture_type"
+        ).get(pk=run.pk)
+        return Response(FixtureRunSerializer(run).data, status=201)
+
+
+class ProductViewSet(viewsets.ModelViewSet):
+    serializer_class = ProductSerializer
+
+    def get_queryset(self):
+        qs = Product.objects.filter(is_active=True)
+        q = self.request.query_params.get("q")
+        if q:
+            from django.db.models import Q
+            qs = qs.filter(Q(name__icontains=q) | Q(sku__icontains=q))
+        category = self.request.query_params.get("category")
+        if category:
+            qs = qs.filter(category__iexact=category)
+        return qs
+
+    def get_serializer_context(self):
+        ctx = super().get_serializer_context()
+        ctx["request"] = self.request
+        return ctx
+
+    @action(detail=False, methods=["post"], url_path="import")
+    def import_csv(self, request):
+        csv_file = request.FILES.get("file") or request.FILES.get("csv")
+        if not csv_file:
+            return Response({"detail": "CSV file required (file=)"}, status=400)
+        zip_file = request.FILES.get("images") or request.FILES.get("zip")
+        job = import_products_csv(csv_file, zip_file)
+        return Response(
+            {
+                "id": job.id,
+                "state": job.state,
+                "created_count": job.created_count,
+                "updated_count": job.updated_count,
+                "error_count": job.error_count,
+                "report": job.report,
+            },
+            status=200 if job.state == "ready" else 400,
+        )
+
+    @action(detail=True, methods=["post"], url_path="upload-image")
+    def upload_image(self, request, pk=None):
+        product = self.get_object()
+        image = request.FILES.get("image") or request.FILES.get("file")
+        if not image:
+            return Response({"detail": "image file required"}, status=400)
+        product.front_image = image
+        product.image_incomplete = False
+        product.readiness = "image_complete"
+        product.save()
+        return Response(ProductSerializer(product, context={"request": request}).data)
+
+
+class PlanogramViewSet(viewsets.ModelViewSet):
+    serializer_class = PlanogramSerializer
+
+    def get_queryset(self):
+        qs = Planogram.objects.select_related("scene", "store")
+        store_id = self.request.query_params.get("store")
+        if store_id:
+            qs = qs.filter(store_id=store_id)
+        return qs
+
+    def perform_create(self, serializer):
+        pog = serializer.save(owner=self.request.user)
+        PlanogramScene.objects.get_or_create(
+            planogram=pog,
+            defaults={
+                "graph": {"schema_version": 5, "units": "mm", "blocks": [], "placements": []}
+            },
+        )
+
+    @action(detail=True, methods=["get", "put"], url_path="scene")
+    def scene(self, request, pk=None):
+        pog = self.get_object()
+        scene, _ = PlanogramScene.objects.get_or_create(
+            planogram=pog,
+            defaults={
+                "graph": {"schema_version": 5, "units": "mm", "blocks": [], "placements": []}
+            },
+        )
+        if request.method == "GET":
+            return Response(
+                {
+                    "schema_version": scene.schema_version,
+                    "graph": scene.graph,
+                    "updated_at": scene.updated_at,
+                }
+            )
+
+        client_updated = request.data.get("updated_at")
+        if client_updated:
+            from django.utils.dateparse import parse_datetime
+
+            parsed = parse_datetime(client_updated)
+            if parsed and parsed < scene.updated_at:
+                return Response(
+                    {
+                        "detail": "Conflict — reload scene",
+                        "updated_at": scene.updated_at,
+                    },
+                    status=status.HTTP_409_CONFLICT,
+                )
+
+        graph = request.data.get("graph") or scene.graph
+        # Server re-validate width-fit (A15 / C8).
+        carrier_ids = set()
+        for p in graph.get("placements") or []:
+            ref = p.get("carrier_ref") or {}
+            if ref.get("component_instance_id"):
+                carrier_ids.add(ref["component_instance_id"])
+        carriers = {}
+        for c in ComponentInstance.objects.filter(id__in=carrier_ids):
+            carriers[str(c.id)] = {
+                "width_mm": c.width_mm,
+                "reserved_insets_mm": c.reserved_insets_mm
+                or c.component_type.reserved_inset_mm,
+            }
+        issues = validate_scene_width_fit(graph, carriers)
+        errors = [i for i in issues if i.get("severity") == "error"]
+        scene.graph = graph
+        scene.schema_version = int(request.data.get("schema_version", 5))
+        scene.save()
+        return Response(
+            {
+                "schema_version": scene.schema_version,
+                "graph": scene.graph,
+                "updated_at": scene.updated_at,
+                "validation": {"issues": issues, "ok": len(errors) == 0},
+            }
+        )
+
+    @action(detail=True, methods=["post"], url_path="validate-width")
+    def validate_width(self, request, pk=None):
+        pog = self.get_object()
+        scene = getattr(pog, "scene", None)
+        graph = (request.data.get("graph") if request.data else None) or (
+            scene.graph if scene else {"placements": []}
+        )
+        carrier_id = request.data.get("component_instance_id")
+        if carrier_id:
+            c = get_object_or_404(ComponentInstance, pk=carrier_id)
+            plist = [
+                p
+                for p in (graph.get("placements") or [])
+                if str((p.get("carrier_ref") or {}).get("component_instance_id"))
+                == str(carrier_id)
+            ]
+            summary = summarize_carrier(
+                c.width_mm,
+                c.reserved_insets_mm or c.component_type.reserved_inset_mm,
+                plist,
+            )
+            return Response(summary)
+
+        carriers = {}
+        for c in ComponentInstance.objects.filter(
+            fixture_id__in=pog.target_fixture_ids or []
+        ):
+            carriers[str(c.id)] = {
+                "width_mm": c.width_mm,
+                "reserved_insets_mm": c.reserved_insets_mm
+                or c.component_type.reserved_inset_mm,
+            }
+        issues = validate_scene_width_fit(graph, carriers)
+        return Response({"issues": issues, "ok": not any(i["severity"] == "error" for i in issues)})
+
+    @action(detail=True, methods=["post"], url_path="place-products")
+    def place_products(self, request, pk=None):
+        """
+        D1 Must #4: Place user-specified SKU list on selected carrier
+        using deterministic width-fit (sequential pack).
+        """
+        pog = self.get_object()
+        scene, _ = PlanogramScene.objects.get_or_create(
+            planogram=pog,
+            defaults={
+                "graph": {"schema_version": 5, "units": "mm", "blocks": [], "placements": []}
+            },
+        )
+        carrier = get_object_or_404(
+            ComponentInstance, pk=request.data.get("component_instance_id")
+        )
+        skus = request.data.get("skus") or []
+        facings_default = int(request.data.get("facings", 1))
+        products = list(Product.objects.filter(sku__in=skus, is_active=True))
+        by_sku = {p.sku: p for p in products}
+        ordered = [by_sku[s] for s in skus if s in by_sku]
+
+        available = carrier.available_width_mm
+        graph = dict(scene.graph or {})
+        placements = list(graph.get("placements") or [])
+        # Remove existing on this carrier if replace=true
+        if request.data.get("replace", True):
+            placements = [
+                p
+                for p in placements
+                if str((p.get("carrier_ref") or {}).get("component_instance_id"))
+                != str(carrier.id)
+            ]
+
+        used = sum(
+            int(p.get("width_consumed_mm") or 0)
+            for p in placements
+            if str((p.get("carrier_ref") or {}).get("component_instance_id"))
+            == str(carrier.id)
+        )
+        seq = 0
+        placed = []
+        overflow_skus = []
+        for prod in ordered:
+            orient = prod.orientation
+            eff = prod.effective_width_mm(orient)
+            facings = facings_default
+            consumed = eff * facings
+            if used + consumed > available:
+                overflow_skus.append(prod.sku)
+                continue
+            entry = {
+                "id": str(uuid.uuid4()),
+                "product_id": prod.id,
+                "sku": prod.sku,
+                "carrier_ref": {
+                    "fixture_instance_id": carrier.fixture_id,
+                    "component_instance_id": carrier.id,
+                    "kind": "shelf",
+                    "face": carrier.face,
+                    "index": carrier.shelf_index,
+                },
+                "facings": facings,
+                "sequence": seq,
+                "orientation": orient,
+                "effective_width_mm": eff,
+                "width_consumed_mm": consumed,
+            }
+            placements.append(entry)
+            placed.append(entry)
+            used += consumed
+            seq += 1
+
+        graph["placements"] = placements
+        graph["schema_version"] = 5
+        graph["units"] = "mm"
+        graph.setdefault("blocks", [])
+        scene.graph = graph
+        scene.save()
+        summary = summarize_carrier(
+            carrier.width_mm,
+            carrier.reserved_insets_mm or carrier.component_type.reserved_inset_mm,
+            [
+                p
+                for p in placements
+                if str((p.get("carrier_ref") or {}).get("component_instance_id"))
+                == str(carrier.id)
+            ],
+        )
+        return Response(
+            {
+                "placed": placed,
+                "overflow_skus": overflow_skus,
+                "summary": summary,
+                "graph": scene.graph,
+                "updated_at": scene.updated_at,
+            }
+        )
+
+
+class WidthFitPreviewView(APIView):
+    """Client preview helper — same formula as server validate."""
+
+    def post(self, request):
+        width_mm = int(request.data.get("carrier_width_mm", 0))
+        insets = int(request.data.get("reserved_insets_mm", 0))
+        placements = request.data.get("placements") or []
+        # Enrich effective_width from products when only product_id given
+        enriched = []
+        for p in placements:
+            item = dict(p)
+            if "effective_width_mm" not in item and item.get("product_id"):
+                prod = Product.objects.filter(pk=item["product_id"]).first()
+                if prod:
+                    orient = item.get("orientation") or prod.orientation
+                    item["effective_width_mm"] = effective_width_mm(
+                        prod.width_mm, prod.height_mm, orient
+                    )
+                    item.setdefault("orientation", orient)
+            enriched.append(item)
+        return Response(summarize_carrier(width_mm, insets, enriched))

@@ -1,0 +1,13 @@
+sku,name,brand,category,width_mm,height_mm,depth_mm,orientation,barcode
+COLA500,Cola Classic 500 ml,FizzCo,Beverages,66,220,66,normal,000000000000
+COLA330,Cola Classic 330 ml,FizzCo,Beverages,58,115,58,normal,000000000001
+WATER1500,Spring Water 1.5 L,ClearSpring,Beverages,85,300,85,normal,000000000002
+CHIPS150,Salted Chips 150 g,CrunchFarm,Snacks,80,220,50,normal,000000000003
+CHIPS40,Salted Chips 40 g,CrunchFarm,Snacks,50,140,30,normal,000000000004
+OATS500,Rolled Oats 500 g,MorningMill,Breakfast,95,180,60,normal,000000000005
+MILK1L,Whole Milk 1 L,DairyHill,Dairy,70,230,70,normal,000000000006
+YOG125,Greek Yogurt 125 g,DairyHill,Dairy,75,75,75,normal,000000000007
+PASTA500,Spaghetti 500 g,PastaRoma,Grocery,50,280,30,normal,000000000008
+RICE1KG,Long Grain Rice 1 kg,GrainField,Grocery,100,200,60,normal,000000000009
+SOAP200,Bar Soap 200 g,CleanHome,HBA,90,60,40,normal,000000000010
+SHAM400,Shampoo 400 ml,CleanHome,HBA,70,200,50,normal,000000000011
