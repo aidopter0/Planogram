@@ -356,12 +356,19 @@ class Command(BaseCommand):
             },
         )
         carrier = bay.components.filter(shelf_index=2).first() or bay.components.first()
-        products = list(Product.objects.filter(sku__in=["COLA500", "COLA330", "WATER1500"]))
+        sku_facings = [("COLA500", 4), ("COLA330", 3), ("WATER1500", 2)]
+        products = {
+            p.sku: p
+            for p in Product.objects.filter(sku__in=[s for s, _ in sku_facings])
+        }
         placements = []
         seq = 0
         used = 0
         if carrier:
-            for prod, facings in zip(products, [4, 3, 2]):
+            for sku, facings in sku_facings:
+                prod = products.get(sku)
+                if not prod:
+                    continue
                 eff = prod.effective_width_mm()
                 consumed = eff * facings
                 if used + consumed > carrier.available_width_mm:
