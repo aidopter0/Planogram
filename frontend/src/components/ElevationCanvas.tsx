@@ -1,5 +1,5 @@
 import { Canvas } from "@react-three/fiber";
-import { OrthographicCamera, Text } from "@react-three/drei";
+import { OrthographicCamera } from "@react-three/drei";
 import { useMemo } from "react";
 import type { Placement, Product } from "../api";
 
@@ -73,14 +73,7 @@ function FacingStrip({
           </mesh>
         </group>
       ))}
-      <Text
-        position={[shelfW / 2, -0.45, 0]}
-        fontSize={0.18}
-        color="#64748b"
-        anchorX="center"
-      >
-        {`available ${availableWidthMm} mm`}
-      </Text>
+      {/* Width label is shown in the HTML width meter — keep canvas geometry-only. */}
     </group>
   );
 }
