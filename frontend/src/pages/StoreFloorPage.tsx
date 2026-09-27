@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
-import { api } from "../api";
+import { useNavigate, useParams } from "react-router-dom";
+import { api, type Product } from "../api";
 import ElevationCanvas from "../components/ElevationCanvas";
 
 type Store = { id: number; name: string; code: string };
@@ -60,17 +60,6 @@ type FixtureInstance = {
   bay_width_mm: number;
   params: Record<string, number>;
   components: ComponentInstance[];
-};
-
-type Product = {
-  id: number;
-  sku: string;
-  name: string;
-  width_mm: number;
-  height_mm: number;
-  orientation: string;
-  effective_width_mm: number;
-  front_image_url: string | null;
 };
 
 type Placement = {
